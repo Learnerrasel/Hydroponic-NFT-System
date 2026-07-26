@@ -1,0 +1,180 @@
+#define BLYNK_TEMPLATE_ID "TMPL6VmDlgbsM"
+#define BLYNK_TEMPLATE_NAME "Hydroponics System"
+#define BLYNK_AUTH_TOKEN "YOUR_AUTH_TOKEN"
+
+#define BLYNK_PRINT Serial
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <DHT.h>
+
+char ssid[] = "YOUR_WIFI_NAME";
+char pass[] = "YOUR_WIFI_PASSWORD";
+
+#define pHPin           34
+#define relayPin        26
+#define waterSensorPin  27
+
+#define TEMP_PIN        32
+#define DHTPIN          33
+#define DHTTYPE         DHT11
+
+#define LDRPin          2
+#define ledPin          15
+
+#define SDA_PIN         21
+#define SCL_PIN         22
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+BlynkTimer timer;
+
+OneWire oneWire(TEMP_PIN);
+DallasTemperature ds18b20(&oneWire);
+DHT dht(DHTPIN, DHTTYPE);
+
+bool autoPump = true;
+bool autoLight = true;
+
+BLYNK_WRITE(V3)
+{
+  autoPump = param.asInt();
+}
+
+float readPH()
+{
+  int raw = analogRead(pHPin);
+  float voltage = (raw * 3.3) / 4095.0;
+
+  float ph = 7 + ((2.5 - voltage) / 0.18);
+
+  if (ph < 0) ph = 0;
+  if (ph > 14) ph = 14;
+
+  return ph;
+}
+
+void sendSensorData()
+{
+  float phValue = readPH();
+
+  int water = digitalRead(waterSensorPin);
+
+  ds18b20.requestTemperatures();
+  float temperature = ds18b20.getTempCByIndex(0);
+
+  if (temperature == -127 || temperature < -50)
+    temperature = 0;
+
+  float humidity = dht.readHumidity();
+
+  if (isnan(humidity))
+    humidity = 0;
+
+  int lightValue = analogRead(LDRPin);
+
+  /************ AUTO PUMP ************/
+  if (autoPump)
+  {
+    if (water == LOW)
+    {
+      digitalWrite(relayPin, HIGH);
+      Blynk.virtualWrite(V2, 1);
+    }
+    else
+    {
+      digitalWrite(relayPin, LOW);
+      Blynk.virtualWrite(V2, 0);
+    }
+  }
+
+  /************ AUTO LIGHT ************/
+  if (autoLight)
+  {
+    if (lightValue < 1500)
+    {
+      digitalWrite(ledPin, HIGH);
+      Blynk.virtualWrite(V7, 1);
+    }
+    else
+    {
+      digitalWrite(ledPin, LOW);
+      Blynk.virtualWrite(V7, 0);
+    }
+  }
+
+  /************ LCD ************/
+  lcd.clear();
+
+  lcd.setCursor(0,0);
+  lcd.print("pH:");
+  lcd.print(phValue,1);
+  lcd.print(" H:");
+  lcd.print(humidity,0);
+
+  lcd.setCursor(0,1);
+  lcd.print("T:");
+  lcd.print(temperature,1);
+  lcd.print(" L:");
+  lcd.print(lightValue);
+
+  /************ BLYNK ************/
+  Blynk.virtualWrite(V1, phValue);
+  Blynk.virtualWrite(V4, temperature);
+  Blynk.virtualWrite(V5, humidity);
+  Blynk.virtualWrite(V6, lightValue);
+
+  /************ SERIAL ************/
+  Serial.print("pH: ");
+  Serial.print(phValue);
+
+  Serial.print(" Temp: ");
+  Serial.print(temperature);
+
+  Serial.print(" Hum: ");
+  Serial.print(humidity);
+
+  Serial.print(" Water: ");
+  Serial.print(water);
+
+  Serial.print(" Light: ");
+  Serial.println(lightValue);
+}
+
+void setup()
+{
+  Serial.begin(115200);
+
+  pinMode(relayPin, OUTPUT);
+  pinMode(waterSensorPin, INPUT_PULLUP);
+  pinMode(ledPin, OUTPUT);
+  pinMode(LDRPin, INPUT);
+
+  digitalWrite(relayPin, LOW);
+  digitalWrite(ledPin, LOW);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Connecting...");
+
+  ds18b20.begin();
+  dht.begin();
+
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+  lcd.clear();
+  lcd.print("Blynk Connected");
+
+  timer.setInterval(2000L, sendSensorData);
+}
+
+void loop()
+{
+  Blynk.run();
+  timer.run();
+}
